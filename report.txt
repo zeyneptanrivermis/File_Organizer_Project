@@ -1,0 +1,10 @@
+--- RAPOR --- (Kaynak: C:\Users\tuana\File_Organizer_Project-3\File_Organizer_Project\logs\organizer.log)
+========================================
+ TOPLAM TAŞINAN DOSYA SAYISI: 4
+========================================
+KATEGORİ DAĞILIMI:
+----------------------------------------
+ Code                 : 3
+ Images               : 1
+----------------------------------------
+Rapor sonu.

@@ -3,6 +3,13 @@ from pathlib import Path
 from config_loader import load_config
 from logger import get_logger
 from reporter import generate_report
+from typing import Dict, Optional
+
+# Optional import: FilterEngine (enabling filter-based runs from Organizer)
+try:
+    from filter_engine import FilterEngine
+except Exception:
+    FilterEngine = None
 
 class Organizer:
     def __init__(self):
@@ -181,3 +188,17 @@ class Organizer:
 if __name__ == "__main__":
     organizer = Organizer()
     organizer.scan_directory()
+
+    # Example: run filter engine from organizer (if desired)
+    # filter_conf = {
+    #     'size_min_mb': 0,
+    #     'size_max_mb': float('inf'),
+    #     'extensions': ['.jpg', '.png'],
+    #     'categories': [],
+    #     'use_category_folders': True,
+    # }
+    # if FilterEngine:
+    #     print('Running FilterEngine...')
+    #     print(organizer.run_filter_engine(filter_conf, mode='organize'))
+
+    

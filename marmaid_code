@@ -1,0 +1,91 @@
+graph TD
+    A[config.json] -->|Ayarları yükle| B[ConfigLoader]
+    B -->|source_directory| C[Source Folder]
+    B -->|destination_directory| D[Destination Folder]
+    B -->|file_extensions| E[Kategori Kuralları]
+    
+    B -->|Kategorileri sağla| F[FilterRules]
+    B -->|Logger yapılandırması| G[Logger]
+    
+    G -->|Tüm işlemleri kaydet| H["logs/organizer.log"]
+    
+    I[Cleaner] -->|Dosya adını temizle| J["İsim Temizleme<br/>- Türkçe karakterler<br/>- Boşluk → _<br/>- İstenmeyen char"]
+    
+    C -->|Dosyaları tara| K[Organizer]
+    K -->|scan_directory| L["Tüm dosyaları tarama"]
+    K -->|organize_file| M["Tekil dosya işleme"]
+    K -->|organize_folder| N["Klasör işleme"]
+    K -->|apply_filters| O["FilterEngine ile filtrele"]
+    
+    L -->|Çağırır| P[FilterEngine]
+    M -->|Çağırır| P
+    O -->|Çağırır| P
+    
+    P -->|scan_with_filters| Q["Dosyaları tarama"]
+    
+    Q -->|Filtre oluştur| R[CompositeFilter]
+    R -->|Boyut filtresi ekle| S["SizeFilter<br/>min_mb - max_mb"]
+    R -->|Uzantı filtresi ekle| T["ExtensionFilter<br/>.jpg, .png, .py"]
+    R -->|Kategori filtresi ekle| U["CategoryFilter<br/>Images, Documents"]
+    
+    S -->|AND mantığı| V{"Tüm Filtreler<br/>Geçti mi?"}
+    T -->|AND mantığı| V
+    U -->|AND mantığı| V
+    
+    V -->|EVET| W["Eşleşen Dosyalar"]
+    V -->|HAYIR| X["Atla"]
+    
+    W -->|organize_mode| Y{"İşlem Tipi<br/>Seç"}
+    Y -->|organize| Z1["organize_files<br/>Klasörlere taşı"]
+    Y -->|archive| Z2["archive_folders<br/>ZIP dosyası oluştur"]
+    Y -->|both| Z3["Her ikisini yap<br/>Taşı + Archive"]
+    
+    Z1 -->|Kategori bul| AA["Hedef klasör<br/>Images/Documents"]
+    AA -->|Adı temizle| I
+    I -->|Çakışma kontrol| AB["_get_unique_path<br/>name_1, name_2..."]
+    AB -->|shutil.move| AC["Dosya Taşı"]
+    
+    Z2 -->|zipfile.ZipFile| AD["ZIP dosyası<br/>oluştur"]
+    AD -->|Dosyaları ekle| AE["archive.zip"]
+    AE -->|İstatistik| AF["Arşiv Sonuçları"]
+    
+    Z3 -->|Paralel| Z1
+    Z3 -->|Paralel| Z2
+    
+    AC -->|Bilgi kaydet| G
+    AF -->|Bilgi kaydet| G
+    
+    G -->|Log yaz| H
+    H -->|Oku ve analiz| AH[Reporter]
+    AH -->|İstatistik hesapla| AI["report.txt<br/>TASINDI sayısı<br/>Kategori dağılımı"]
+    
+    K -->|Organize sonrası| AH
+    
+    J1[app_gui.py] -->|"Hemen Organize Et"| K
+    J1 -->|"Otomatik İzle"| AJ["Watcher<br/>watchdog"]
+    J1 -->|Rapor göster| AI
+    J1 -->|Logger entegrasyonu| G
+    AJ -->|Dinle| AK["Yeni dosya eklendiğinde"]
+    AK -->|Hemen işle| M
+    
+    J2[main.py] -->|Seçenek 1| K
+    J2 -->|Seçenek 2| AJ
+    J2 -->|Seçenek 3| AH
+    
+    J3["Arkadaşın GUI<br/>filter_ui_helper"] -->|Filtre seçimleri| AL["FilterUIHelper"]
+    AL -->|preview_filters| AO["Kaç dosya<br/>etkilenecek?"]
+    AO -->|Göster| J3
+    AL -->|execute_filter| AP["FilterEngine.execute<br/>Tüm işlem başla"]
+    AP -->|Sonuç döndür| AQ["success, matched<br/>organize_result<br/>archive_result"]
+    AQ -->|Göster| J3
+    
+    style A fill:#e1f5ff
+    style H fill:#fff9c4
+    style AI fill:#fff9c4
+    style AE fill:#fff9c4
+    style P fill:#c8e6c9
+    style K fill:#f8bbd0
+    style J1 fill:#ffe0b2
+    style J2 fill:#ffe0b2
+    style J3 fill:#ffe0b2
+    style AJ fill:#d1c4e9
