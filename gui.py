@@ -177,6 +177,13 @@ async def main(page: ft.Page):
             total_size_row = conn.execute("SELECT SUM(size) FROM files").fetchone()
             total_size = total_size_row[0] if total_size_row and total_size_row[0] else 0
             page.app_state["stats"]["total_size_gb"] = total_size / (1024**3)
+            
+            # Son işlem zamanını stat olarak göster
+            last_op = conn.execute("SELECT timestamp FROM operations ORDER BY timestamp DESC LIMIT 1").fetchone()
+            if last_op:
+                page.app_state["stats"]["time"] = last_op[0].split()[-1] # Sadece saati göster
+            else:
+                page.app_state["stats"]["time"] = "Yok"
 
         await build_ui()
 
@@ -539,6 +546,7 @@ async def main(page: ft.Page):
         
         async def toggle_model(model_id):
             for m in page.app_state["models"]:
+                if m["id"] == model_id:
                     m["active"] = not m["active"]
                     status_text = "Aktif" if m["active"] else "Pasif"
                     DBManager().log_event(f"Model Durumu Değişti: {m['name']} ({status_text})")

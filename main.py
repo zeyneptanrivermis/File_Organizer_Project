@@ -23,9 +23,9 @@ def main():
     print("2. Otomatik İzlemeyi Başlat (Watcher Modu)")
     print("3. Rapor Al")
     print("4. Filtre Motorunu Çalıştır (FilterEngine)")
-    print("4. Çıkış")
+    print("5. Çıkış")
     
-    secim = input("Seçiminiz (1-4): ")
+    secim = input("Seçiminiz (1-5): ")
     
     if secim == '1':
         print("Tarama başlıyor...")

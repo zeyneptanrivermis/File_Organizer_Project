@@ -47,6 +47,6 @@
     "source_directory": "C:/Users/tanri/Pictures",
     "destination_directory": "",
     "models": [],
-    "clean_names": true,
-    "backup_enabled": true
+    "clean_names": false,
+    "backup_enabled": false
 }

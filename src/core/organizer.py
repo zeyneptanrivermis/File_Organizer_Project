@@ -6,6 +6,7 @@ from reporter import generate_report
 from db_manager import DBManager
 import datetime
 import os
+import mimetypes
 
 class Organizer:
     def __init__(self):
@@ -140,12 +141,14 @@ class Organizer:
             # --- DB'YE KAYDET ---
             try:
                 stats = os.stat(destination_path)
+                mime_type, _ = mimetypes.guess_type(str(destination_path))
                 file_metadata = {
                     'name': destination_path.name,
                     'ext': destination_path.suffix.lower(),
-                    'mime': 'unknown',
+                    'mime': mime_type or 'unknown',
                     'size': stats.st_size,
                     'created': datetime.datetime.fromtimestamp(stats.st_ctime).isoformat(),
+                    'modified': datetime.datetime.fromtimestamp(stats.st_mtime).isoformat(),
                     'accessed': datetime.datetime.fromtimestamp(stats.st_atime).isoformat()
                 }
                 self.db.log_move(file_metadata, file_path, destination_path)
@@ -220,6 +223,7 @@ class Organizer:
                     'mime': 'directory',
                     'size': 0, # Klasör boyutu hesaplaması pahalı olduğu için 0
                     'created': datetime.datetime.fromtimestamp(stats.st_ctime).isoformat(),
+                    'modified': datetime.datetime.fromtimestamp(stats.st_mtime).isoformat(),
                     'accessed': datetime.datetime.fromtimestamp(stats.st_atime).isoformat()
                 }
                 self.db.log_move(file_metadata, folder_path, destination_path)
@@ -265,12 +269,14 @@ class Organizer:
                 
                 # DB LOG
                 stats = os.stat(final_dest)
+                mime_type, _ = mimetypes.guess_type(str(final_dest))
                 file_metadata = {
                     'name': final_dest.name,
                     'ext': final_dest.suffix.lower(),
-                    'mime': 'unknown',
+                    'mime': mime_type or 'unknown',
                     'size': stats.st_size,
                     'created': datetime.datetime.fromtimestamp(stats.st_ctime).isoformat(),
+                    'modified': datetime.datetime.fromtimestamp(stats.st_mtime).isoformat(),
                     'accessed': datetime.datetime.fromtimestamp(stats.st_atime).isoformat()
                 }
                 self.db.log_move(file_metadata, src_path, final_dest)
@@ -320,8 +326,12 @@ class Organizer:
                             found_category = category
                             break
                 
+                # Sanitize name for display
+                clean_name = self.sanitize_filename(item.name)
+                
                 preview.append({
-                    "filename": item.name,
+                    "filename": clean_name,
+                    "original_name": item.name,
                     "path": str(item),
                     "target_folder": found_category,
                     "type": "file"

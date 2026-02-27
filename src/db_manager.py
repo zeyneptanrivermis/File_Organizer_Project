@@ -25,12 +25,26 @@ class DBManager:
                     id INTEGER PRIMARY KEY, 
                     folder_id INTEGER, 
                     name TEXT, 
+                    path TEXT UNIQUE,
                     extension TEXT, 
                     mime_type TEXT, 
                     size INTEGER,
                     created_at DATETIME, 
+                    modified_at DATETIME,
                     last_accessed DATETIME,
                     FOREIGN KEY(folder_id) REFERENCES folders(id))""")
+            
+            # Migration - Eğer tablo varsa ama sütunlar yoksa ekle
+            cursor = conn.execute("PRAGMA table_info(files)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            if "path" not in existing_columns:
+                conn.execute("ALTER TABLE files ADD COLUMN path TEXT")
+            if "modified_at" not in existing_columns:
+                conn.execute("ALTER TABLE files ADD COLUMN modified_at DATETIME")
+
+            # Indexler - Performans ve Uniqueness için
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path ON files(path)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_folders_path ON folders(path)")
             
             # İşlem türleri tablosu
             conn.execute("CREATE TABLE IF NOT EXISTS op_types (id INTEGER PRIMARY KEY, name TEXT UNIQUE)")
@@ -61,10 +75,10 @@ class DBManager:
             
             # Dosyayı kaydet
             cursor = conn.execute("""
-                INSERT INTO files (folder_id, name, extension, mime_type, size, created_at, last_accessed)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (folder_id, file_metadata['name'], file_metadata['ext'], file_metadata['mime'], 
-                  file_metadata['size'], file_metadata['created'], file_metadata['accessed']))
+                INSERT INTO files (folder_id, name, path, extension, mime_type, size, created_at, modified_at, last_accessed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (folder_id, file_metadata['name'], str(new_path), file_metadata['ext'], file_metadata['mime'], 
+                  file_metadata['size'], file_metadata['created'], file_metadata['modified'], file_metadata['accessed']))
             file_id = cursor.lastrowid
             
             # İşlemi kaydet
