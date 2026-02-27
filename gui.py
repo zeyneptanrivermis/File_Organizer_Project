@@ -7,7 +7,25 @@ import flet as ft
 import os
 import datetime
 import asyncio
+import sys
+from pathlib import Path
+
+# Add src and src/core to sys.path
+base_path = Path(__file__).parent
+src_path = base_path / "src"
+core_path = src_path / "core"
+
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+if str(core_path) not in sys.path:
+    sys.path.insert(0, str(core_path))
+
+from config_loader import load_config, save_config
 from organizer import Organizer
+from db_manager import DBManager
+from undo_manager import UndoManager
+from watcher import Watcher
+import threading
 
 
 # Renk Paleti - Modern & Premium Dark
@@ -29,31 +47,71 @@ async def main(page: ft.Page):
     page.title = "File Organizer Pro"
     page.padding = 0
     page.spacing = 0
-    page.window_width = 1100
-    page.window_height = 800
+    page.window.width = 1100
+    page.window.height = 800
     page.theme_mode = ft.ThemeMode.DARK
     
     # State yönetimi (Yeniden yüklemelerde korunur)
     if not hasattr(page, "app_state"):
+        config = load_config()
         page.app_state = {
             "is_dark": True,
-            "source_path": os.path.join(os.path.expanduser("~"), "Downloads"),
-            "dest_path": "",
+            "source_path": config.get("source_directory", os.path.join(os.path.expanduser("~"), "Downloads")),
+            "dest_path": config.get("destination_directory", ""),
             "same_folder": True,
             "selected_tab": 0,
             "is_monitoring": False,
-            "models": [
+            "models": config.get("models", [
                 {"id": 1, "name": "Resim Düzenleyici", "pattern": "*.jpg, *.png", "target": "Resimler", "active": True},
                 {"id": 2, "name": "Belge Tasnifi", "pattern": "*.pdf, *.docx", "target": "Belgeler", "active": True},
                 {"id": 3, "name": "Video Arşivi", "pattern": "*.mp4, *.mkv", "target": "Videolar", "active": False},
-            ],
+            ]),
             "logs": [],
-            "stats": {
-                "total": 0,
-                "organized": 0,
-                "time": "0sn"
-            }
+            "stats": {"total": 0, "organized": 0, "time": "0s"},
+            "selected_history": set()
         }
+
+    async def save_app_config():
+        config = load_config()
+        config["source_directory"] = page.app_state["source_path"]
+        config["models"] = page.app_state["models"]
+        config["clean_names"] = page.app_state.get("clean_names", True)
+        config["backup_enabled"] = page.app_state.get("backup_enabled", False)
+        save_config(config)
+
+    # Watcher thread yönetimi
+    if not hasattr(page, "watcher"):
+        page.watcher = None
+        page.watcher_thread = None
+
+    def start_watcher():
+        if page.watcher:
+            stop_watcher()
+        
+        source = page.app_state["source_path"]
+        if not os.path.exists(source):
+            return
+            
+        page.watcher = Watcher(source)
+        # Watcher class'ını modifiye etmemek için stop_event kullanalım veya thread'i daemon yapalım
+        # Şimdilik basitçe observer'ı ayrı thread'de başlatalım
+        def watcher_worker():
+            page.watcher.observer.schedule(page.watcher.handler, str(page.watcher.directory), recursive=False)
+            page.watcher.observer.start()
+            while page.app_state["is_monitoring"]:
+                # Organizer zaten organize_file içinde load_config() yapıyor.
+                time.sleep(1)
+            page.watcher.observer.stop()
+            page.watcher.observer.join()
+
+        import time
+        page.watcher_thread = threading.Thread(target=watcher_worker, daemon=True)
+        page.watcher_thread.start()
+
+    def stop_watcher():
+        page.app_state["is_monitoring"] = False
+        if page.watcher:
+            page.watcher = None
 
     # REFS - UI Senkronizasyonu için
     source_ref = ft.Ref[ft.TextField]()
@@ -98,6 +156,43 @@ async def main(page: ft.Page):
         page.overlay.append(snack)
         snack.open = True
         page.update()
+
+    async def refresh_stats():
+        """Veritabanından sayıları çekip arayüzü yeniler."""
+        db = DBManager()
+        conf = load_config()
+        ext_map = conf.get("file_extensions", {})
+        cat_stats = db.get_category_stats(ext_map)
+        
+        # State güncelleme
+        page.app_state["category_counts"] = {cat: cat_stats.get(cat, {"count": 0})["count"] for cat in ext_map}
+        page.app_state["category_counts"]["Others"] = cat_stats.get("Others", {"count": 0})["count"]
+        
+        with db._get_connection() as conn:
+            # Toplam dosya sayısı
+            total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            page.app_state["stats"]["organized"] = total or 0
+            
+            # Toplam boyut
+            total_size_row = conn.execute("SELECT SUM(size) FROM files").fetchone()
+            total_size = total_size_row[0] if total_size_row and total_size_row[0] else 0
+            page.app_state["stats"]["total_size_gb"] = total_size / (1024**3)
+
+        await build_ui()
+
+    async def toggle_setting(key, val):
+        # Bu ayarlar şu an app_state'de tutulabilir veya config'e kaydedilebilir
+        page.app_state[key] = val
+        if key == "is_monitoring":
+            if val:
+                start_watcher()
+                page.app_state["logs"].append({"time": datetime.datetime.now().strftime("%H:%M:%S"), "type": "info", "msg": "Otomatik izleme başlatıldı."})
+            else:
+                stop_watcher()
+                page.app_state["logs"].append({"time": datetime.datetime.now().strftime("%H:%M:%S"), "type": "info", "msg": "Otomatik izleme durduruldu."})
+        
+        await save_app_config()
+        await build_ui()
 
     async def select_folder_native(target_name):
         import tkinter as tk
@@ -167,7 +262,9 @@ async def main(page: ft.Page):
             
         try:
             org = Organizer()
-            preview_files = org.get_preview(source, dest)
+            db = DBManager()
+            undo = UndoManager()
+            preview_files = org.get_preview(source, dest, page.app_state["same_folder"])
             
             if not preview_files:
                 show_notification("Organize edilecek dosya bulunamadı.", "warning")
@@ -224,9 +321,8 @@ async def main(page: ft.Page):
                 if moved_count > 0:
                     show_notification(f"{moved_count} dosya başarıyla taşındı!", "success")
                     page.app_state["logs"].append({"time": now, "type": "success", "msg": f"{moved_count} dosya preview üzerinden taşındı."})
-                    page.app_state["stats"]["organized"] += moved_count
                 
-                await build_ui()
+                await refresh_stats()
 
             update_dialog_content()
 
@@ -245,7 +341,7 @@ async def main(page: ft.Page):
                 ),
                 actions=[
                     ft.TextButton("İptal", on_click=lambda _: setattr(dlg, "open", False) or page.update()),
-                    ft.ElevatedButton("Onayla ve Taşı", bgcolor=COLOR_SUCCESS, color="white", on_click=confirm_move)
+                    ft.Button("Onayla ve Taşı", bgcolor=COLOR_SUCCESS, color="white", on_click=confirm_move)
                 ],
                 bgcolor=c["surface"]
             )
@@ -258,7 +354,7 @@ async def main(page: ft.Page):
             show_notification(f"Hata oluştu: {str(ex)}", "error")
 
     def on_close_click(_):
-        page.window_close()
+        page.window.close()
     
     # Main layout initialization
     page.add(main_layout)
@@ -302,7 +398,7 @@ async def main(page: ft.Page):
                     ft.Text(name, size=14, color=c["text"]),
                 ]),
                 ft.Container(
-                    content=ft.Text(str(count), size=12, weight="w500", color=c["text"]),
+                    content=ft.Text(str(count) if count > 0 else "0", size=12, weight="w500", color=c["text"]),
                     bgcolor=c["border"],
                     padding=ft.Padding.symmetric(horizontal=8, vertical=2),
                     border_radius=10,
@@ -319,19 +415,37 @@ async def main(page: ft.Page):
 
     def build_dashboard():
         c = get_colors()
+        db = DBManager()
+        
+        # Gerçek istatistikleri çek (app_state'den alalım, refresh_stats tarafından güncellenir)
+        total_files = page.app_state["stats"].get("organized", 0)
+        total_size_gb = page.app_state["stats"].get("total_size_gb", 0)
+        
+        undo_mgr = UndoManager()
+        recent_ops = undo_mgr.get_recent_operations(5)
+        
+        from config_loader import load_config
+        conf = load_config()
+        ext_map = conf.get("file_extensions", {})
+        cat_stats = db.get_category_stats(ext_map)
+
+        def get_cat_info(cat_name):
+            s = cat_stats.get(cat_name, {"count": 0, "size": 0})
+            return f"{s['count']} Dosya", f"{s['size']/(1024**2):.1f} MB" if s['size'] < 1024**3 else f"{s['size']/(1024**3):.1f} GB"
+
         return ft.Column([
-            # Organizasyon İlerlemesi
+            # Sistem İstatistikleri
             ft.Container(
                 bgcolor=c["surface"],
                 padding=25,
                 border_radius=15,
                 border=ft.Border.all(1, c["border"]),
                 content=ft.Column([
-                    ft.Text("Organizasyon İlerlemesi", size=18, weight="bold", color=c["text"]),
-                    ft.Text(f"{page.app_state['stats']['organized']} dosya organize edildi", size=13, color=c["secondary"]),
+                    ft.Text("Sistem İstatistikleri", size=18, weight="bold", color=c["text"]),
+                    ft.Text(f"Toplam {total_files} dosya işlendi", size=13, color=c["secondary"]),
                     ft.Container(height=10),
-                    ft.ProgressBar(value=1.0 if (page.app_state['stats']['total'] or 0) <= 0 else page.app_state['stats']['organized'] / page.app_state['stats']['total'], color=COLOR_SUCCESS, bgcolor=c["border"], height=10, border_radius=5),
-                    ft.Text(f"%{(0.0 if (page.app_state['stats']['total'] or 0) <= 0 else page.app_state['stats']['organized'] / page.app_state['stats']['total'] * 100):.1f} tamamlandı", size=12, italic=True, color=c["secondary"]),
+                    ft.ProgressBar(value=1.0, color=COLOR_SUCCESS, bgcolor=c["border"], height=10, border_radius=5),
+                    ft.Text(f"Depolama Etkisi: {total_size_gb:.2f} GB", size=12, italic=True, color=c["secondary"]),
                 ], spacing=5)
             ),
             
@@ -343,8 +457,8 @@ async def main(page: ft.Page):
                         ft.Container(ft.Icon(ft.Icons.IMAGE, color="white"), bgcolor="blue500", padding=12, border_radius=10),
                         ft.Column([
                             ft.Text("Görseller", weight="bold"),
-                            ft.Text("124 Dosya", size=12, color=c["secondary"]),
-                            ft.Text("2.4 GB", size=16, weight="bold")
+                            ft.Text(get_cat_info("Images")[0], size=12, color=c["secondary"]),
+                            ft.Text(get_cat_info("Images")[1], size=16, weight="bold")
                         ], spacing=2)
                     ])
                 ),
@@ -355,8 +469,35 @@ async def main(page: ft.Page):
                         ft.Container(ft.Icon(ft.Icons.VIDEO_FILE, color="white"), bgcolor="purple500", padding=12, border_radius=10),
                         ft.Column([
                             ft.Text("Videolar", weight="bold"),
-                            ft.Text("18 Dosya", size=12, color=c["secondary"]),
-                            ft.Text("8.7 GB", size=16, weight="bold")
+                            ft.Text(get_cat_info("Videos")[0], size=12, color=c["secondary"]),
+                            ft.Text(get_cat_info("Videos")[1], size=16, weight="bold")
+                        ], spacing=2)
+                    ])
+                ),
+            ], spacing=20),
+            
+            ft.Row([
+                ft.Container(
+                    bgcolor=c["surface"], padding=20, border_radius=15, expand=True,
+                    border=ft.Border.all(1, c["border"]),
+                    content=ft.Row([
+                        ft.Container(ft.Icon(ft.Icons.DESCRIPTION, color="white"), bgcolor="green500", padding=12, border_radius=10),
+                        ft.Column([
+                            ft.Text("Belgeler", weight="bold"),
+                            ft.Text(get_cat_info("Documents")[0], size=12, color=c["secondary"]),
+                            ft.Text(get_cat_info("Documents")[1], size=16, weight="bold")
+                        ], spacing=2)
+                    ])
+                ),
+                ft.Container(
+                    bgcolor=c["surface"], padding=20, border_radius=15, expand=True,
+                    border=ft.Border.all(1, c["border"]),
+                    content=ft.Row([
+                        ft.Container(ft.Icon(ft.Icons.CODE, color="white"), bgcolor="red500", padding=12, border_radius=10),
+                        ft.Column([
+                            ft.Text("Kodlar", weight="bold"),
+                            ft.Text(get_cat_info("Code")[0], size=12, color=c["secondary"]),
+                            ft.Text(get_cat_info("Code")[1], size=16, weight="bold")
                         ], spacing=2)
                     ])
                 ),
@@ -370,17 +511,25 @@ async def main(page: ft.Page):
                 border=ft.Border.all(1, c["border"]),
                 padding=20,
                 content=ft.Column([
-                    ft.Row([
-                        ft.Row([ft.Container(width=10, height=10, bgcolor=COLOR_SUCCESS, border_radius=5), 
-                               ft.Text("vacation_photo.jpg", color=c["text"], weight="w500")]),
-                        ft.Text("14:32:18", size=12, color=c["secondary"])
-                    ], alignment="spaceBetween"),
-                    ft.Divider(color=c["border"], height=20),
-                    ft.Row([
-                        ft.Row([ft.Container(width=10, height=10, bgcolor=COLOR_SUCCESS, border_radius=5), 
-                               ft.Text("project_backup.zip", color=c["text"], weight="w500")]),
-                        ft.Text("14:31:42", size=12, color=c["secondary"])
-                    ], alignment="spaceBetween"),
+                    ft.Column([
+                        ft.Row([
+                            ft.Row([
+                                ft.Container(
+                                    width=10, height=10, 
+                                    bgcolor=COLOR_SUCCESS if op['status']=='SUCCESS' else COLOR_WARNING, 
+                                    border_radius=5
+                                ), 
+                                ft.Text(op['name'], color=c["text"], weight="w500", size=13, overflow=ft.TextOverflow.ELLIPSIS)
+                            ], expand=True),
+                            ft.Text(op['timestamp'].split()[1] if ' ' in op['timestamp'] else op['timestamp'], size=12, color=c["secondary"])
+                        ], alignment="spaceBetween") for op in recent_ops
+                    ]),
+                    ft.Divider(),
+                    ft.TextButton(
+                        "Tüm Geçmişi Yönet & Toplu Geri Al", 
+                        icon=ft.Icons.ARROW_FORWARD, 
+                        on_click=lambda _: asyncio.create_task(on_tab_change(1))
+                    )
                 ])
             )
         ], spacing=20, expand=True, scroll="auto")
@@ -390,13 +539,18 @@ async def main(page: ft.Page):
         
         async def toggle_model(model_id):
             for m in page.app_state["models"]:
-                if m["id"] == model_id:
                     m["active"] = not m["active"]
+                    status_text = "Aktif" if m["active"] else "Pasif"
+                    DBManager().log_event(f"Model Durumu Değişti: {m['name']} ({status_text})")
                     break
+            await save_app_config()
             await build_ui()
 
         async def delete_model(model_id):
+            model_name = next((m["name"] for m in page.app_state["models"] if m["id"] == model_id), "Bilinmeyen Model")
             page.app_state["models"] = [m for m in page.app_state["models"] if m["id"] != model_id]
+            await save_app_config()
+            DBManager().log_event(f"Model Silindi: {model_name}")
             show_notification("Model silindi.", "warning")
             await build_ui()
 
@@ -415,6 +569,8 @@ async def main(page: ft.Page):
                     "target": target_ref.current.value,
                     "active": True
                 })
+                asyncio.create_task(save_app_config())
+                DBManager().log_event(f"Yeni Model Eklendi: {name_ref.current.value}")
                 dlg.open = False
                 show_notification("Yeni model eklendi.", "success")
                 asyncio.create_task(build_ui())
@@ -467,26 +623,96 @@ async def main(page: ft.Page):
 
     def build_history_view():
         c = get_colors()
+        undo_mgr = UndoManager()
+        history = undo_mgr.get_recent_operations(20)
+
+        async def run_undo(op_ids=None):
+            if isinstance(op_ids, list):
+                if not op_ids:
+                    show_notification("Seçili işlem yok.", "warning")
+                    return
+                count = 0
+                for oid in op_ids:
+                    success, _ = undo_mgr.undo_operation(oid)
+                    if success: count += 1
+                show_notification(f"{count} işlem başarıyla geri alındı.", "success")
+            elif op_ids:
+                success, msg = undo_mgr.undo_operation(op_ids)
+                show_notification(msg, "success" if success else "error")
+            else:
+                success, msg = undo_mgr.undo_last_operation()
+                show_notification(msg, "success" if success else "error")
+            
+            page.app_state["selected_history"] = set() # Reset selection
+            await refresh_stats()
+
+        async def toggle_history_select(op_id, val):
+            # Create a new set to ensure Flet/Python detects change
+            current_selected = set(page.app_state["selected_history"])
+            if val:
+                current_selected.add(op_id)
+            else:
+                current_selected.discard(op_id)
+            page.app_state["selected_history"] = current_selected
+            await build_ui()
+
+        async def select_all_history(val):
+            current_selected = set()
+            if val:
+                for item in history:
+                    if item['status'] == 'SUCCESS' and item['op_type'] in ('MOVE', 'RENAME'):
+                        current_selected.add(item['id'])
+            page.app_state["selected_history"] = current_selected
+            await build_ui()
+
         return ft.Column([
-            ft.Text("İşlem Geçmişi", size=18, weight="bold", color=c["text"]),
+            ft.Row([
+                ft.Row([
+                    ft.Text("İşlem Geçmişi", size=18, weight="bold", color=c["text"]),
+                    ft.Checkbox(label="Tümünü Seç", on_change=lambda e: asyncio.create_task(select_all_history(e.control.value))) if history else ft.Container()
+                ], spacing=20),
+                ft.Row([
+                    ft.Button(
+                        "Seçilenleri Geri Al", 
+                        icon=ft.Icons.REPLAY_CIRCLE_FILLED, 
+                        bgcolor=COLOR_ACCENT, color="white",
+                        on_click=lambda _: asyncio.create_task(run_undo(list(page.app_state["selected_history"]))),
+                        visible=len(page.app_state["selected_history"]) > 0
+                    ),
+                    ft.Button("Son İşlemi Geri Al", icon=ft.Icons.UNDO, bgcolor=COLOR_WARNING, color="white", on_click=lambda _: asyncio.create_task(run_undo()))
+                ], spacing=10)
+            ], alignment="spaceBetween"),
             ft.ListView(
                 expand=True,
                 spacing=10,
                 controls=[
                     ft.ListTile(
-                        leading=ft.Icon(ft.Icons.INSERT_DRIVE_FILE, color=COLOR_ACCENT),
-                        title=ft.Text(f"Dosya_{i}.txt", color=c["text"]),
-                        subtitle=ft.Text("Taşındı: /Arşiv | 10.02.2026 14:30", color=c["secondary"]),
-                        trailing=ft.IconButton(ft.Icons.UNDO, icon_color=COLOR_WARNING, tooltip="Geri Al"),
-                        bgcolor=c["surface"],
-                        shape=ft.RoundedRectangleBorder(radius=8)
-                    ) for i in range(10)
-                ]
+                        leading=ft.Checkbox(
+                            value=item['id'] in page.app_state["selected_history"],
+                            on_change=lambda e, oid=item['id']: asyncio.create_task(toggle_history_select(oid, e.control.value)),
+                            visible=item['status'] == 'SUCCESS' and item['op_type'] in ('MOVE', 'RENAME')
+                        ),
+                        title=ft.Text(item['name'], color=c["text"], weight="bold" if item['id'] in page.app_state["selected_history"] else "normal"),
+                        subtitle=ft.Text(f"{item['op_type']} | {item['timestamp']} | Durum: {item['status']}", color=c["secondary"]),
+                        bgcolor=ft.Colors.with_opacity(0.1, COLOR_ACCENT) if item['id'] in page.app_state["selected_history"] else c["surface"],
+                        hover_color=c["border"],
+                        shape=ft.RoundedRectangleBorder(radius=8),
+                        on_click=lambda e, oid=item['id']: asyncio.create_task(toggle_history_select(oid, not (oid in page.app_state["selected_history"]))) 
+                            if item['status'] == 'SUCCESS' and item['op_type'] in ('MOVE', 'RENAME') else None,
+                        trailing=ft.IconButton(
+                            icon=ft.Icons.UNDO, 
+                            icon_color=COLOR_WARNING,
+                            tooltip="Bu İşlemi Geri Al",
+                            on_click=lambda e, oid=item['id']: asyncio.create_task(run_undo(oid))
+                        ) if item['status'] == 'SUCCESS' and item['op_type'] in ('MOVE', 'RENAME') else None
+                    ) for item in history
+                ] if history else [ft.Text("Henüz işlem geçmişi yok.", color=c["secondary"])]
             )
         ], expand=True)
 
     def build_logs_view():
         c = get_colors()
+        # Logları log dosyasından okumayı deneyebiliriz, şimdilik state'den
         return ft.Column([
             ft.Text("Sistem Logları", size=18, weight="bold", color=c["text"]),
             ft.Container(
@@ -499,7 +725,49 @@ async def main(page: ft.Page):
                     ft.Text(f"[{log['time']}] {log['type'].upper()}: {log['msg']}", 
                             color=COLOR_INFO if log['type'] == 'info' else (COLOR_SUCCESS if log['type'] == 'success' else COLOR_WARNING), 
                             font_family="monospace") for log in page.app_state["logs"]
-                ], scroll="always")
+                ] if page.app_state["logs"] else [ft.Text("Henüz log kaydı yok.", color=c["secondary"])], scroll="always")
+            )
+        ], expand=True)
+
+    def build_settings_view():
+        c = get_colors()
+        
+        async def clear_db_click(_):
+            db = DBManager()
+            db.log_event("Veritabanı Temizleme İşlemi Başlatıldı")
+            with db._get_connection() as conn:
+                conn.execute("DELETE FROM operations")
+                conn.execute("DELETE FROM files")
+                conn.execute("DELETE FROM folders")
+            show_notification("Veritabanı temizlendi.", "success")
+            await build_ui()
+
+
+        return ft.Column([
+            ft.Text("Ayarlar", size=18, weight="bold", color=c["text"]),
+            ft.Container(
+                bgcolor=c["surface"],
+                padding=20,
+                border_radius=15,
+                border=ft.Border.all(1, c["border"]),
+                content=ft.Column([
+                    ft.Text("Genel Ayarlar", weight="bold", size=16),
+                    ft.Switch(label="Otomatik Organize (Watcher)", 
+                              value=page.app_state.get("is_monitoring", False), 
+                              active_color=COLOR_ACCENT,
+                              on_change=lambda e: asyncio.create_task(toggle_setting("is_monitoring", e.control.value))),
+                    ft.Switch(label="Dosya İsimlerini Temizle", 
+                              value=page.app_state.get("clean_names", True), 
+                              active_color=COLOR_ACCENT,
+                              on_change=lambda e: asyncio.create_task(toggle_setting("clean_names", e.control.value))),
+                    ft.Divider(),
+                    ft.Text("Sistem", weight="bold", size=16),
+                    ft.Button("Veritabanını Temizle", 
+                                     icon=ft.Icons.DELETE_SWEEP, 
+                                     bgcolor=COLOR_ERROR, 
+                                     color="white",
+                                     on_click=clear_db_click),
+                ], spacing=15)
             )
         ], expand=True)
 
@@ -542,6 +810,26 @@ async def main(page: ft.Page):
             ("Modeller", ft.Icons.RULE, 3),
         ]
         
+        from config_loader import load_config
+        conf = load_config()
+        ext_map = conf.get("file_extensions", {})
+        db = DBManager()
+        cat_stats = db.get_category_stats(ext_map)
+
+        def s(cat): return cat_stats.get(cat, {"count": 0})["count"]
+
+        sidebar_content = [
+            ft.Divider(height=20, color=c["border"]),
+            ft.Text("DOSYA KATEGORİLERİ", size=11, weight="bold", color=c["secondary"], opacity=0.7),
+            create_category_item("Görseller", ft.Icons.IMAGE, s("Images"), "blue500"),
+            create_category_item("Videolar", ft.Icons.VIDEO_FILE, s("Videos"), "purple500"),
+            create_category_item("Müzik", ft.Icons.MUSIC_NOTE, s("Music"), "green500"),
+            create_category_item("Arşivler", ft.Icons.FOLDER_ZIP, s("Archives"), "yellow700"),
+            create_category_item("Kodlar", ft.Icons.CODE, s("Code"), "red500"),
+            create_category_item("Belgeler", ft.Icons.DESCRIPTION, s("Documents"), "blue700"),
+            create_category_item("Diğer", ft.Icons.INSERT_DRIVE_FILE, s("Others"), "grey500"),
+        ]
+
         sidebar = ft.Container(
             width=260,
             bgcolor=c["surface"],
@@ -566,20 +854,33 @@ async def main(page: ft.Page):
                     ink=True, on_click=lambda _, idx=i: asyncio.create_task(on_tab_change(idx))
                 ) for label, icon, i in sidebar_items],
                 
-                ft.Divider(height=20, color=c["border"]),
-                ft.Text("DOSYA KATEGORİLERİ", size=11, weight="bold", color=c["secondary"], opacity=0.7),
-                create_category_item("Görseller", ft.Icons.IMAGE, 124, "blue500"),
-                create_category_item("Videolar", ft.Icons.VIDEO_FILE, 18, "purple500"),
-                create_category_item("Müzik", ft.Icons.MUSIC_NOTE, 342, "green500"),
-                create_category_item("Arşivler", ft.Icons.FOLDER_ZIP, 45, "yellow700"),
-                create_category_item("Kod Dosyaları", ft.Icons.CODE, 89, "red500"),
-                create_category_item("Belgeler", ft.Icons.DESCRIPTION, 156, "blue700"),
-                create_category_item("Diğer", ft.Icons.INSERT_DRIVE_FILE, 67, "grey500"),
+                *sidebar_content,
                 
                 ft.Container(height=20),
-                ft.Row([ft.Text("Otomatik Organize", size=12, color=c["text"]), ft.Switch(value=True, scale=0.8, active_color=COLOR_ACCENT)], alignment="spaceBetween"),
-                ft.Row([ft.Text("Dosya Yeniden Adlandır", size=12, color=c["text"]), ft.Switch(value=True, scale=0.8, active_color=COLOR_ACCENT)], alignment="spaceBetween"),
-                ft.Row([ft.Text("Yedek Oluştur", size=12, color=c["text"]), ft.Switch(value=False, scale=0.8, active_color=COLOR_ACCENT)], alignment="spaceBetween"),
+                ft.Row([
+                    ft.Text("Otomatik Organize", size=12, color=c["text"]), 
+                    ft.Switch(
+                        value=page.app_state.get("is_monitoring", False), 
+                        scale=0.8, active_color=COLOR_ACCENT,
+                        on_change=lambda e: asyncio.create_task(toggle_setting("is_monitoring", e.control.value))
+                    )
+                ], alignment="spaceBetween"),
+                ft.Row([
+                    ft.Text("Dosya Yeniden Adlandır", size=12, color=c["text"]), 
+                    ft.Switch(
+                        value=page.app_state.get("clean_names", True), 
+                        scale=0.8, active_color=COLOR_ACCENT,
+                        on_change=lambda e: asyncio.create_task(toggle_setting("clean_names", e.control.value))
+                    )
+                ], alignment="spaceBetween"),
+                ft.Row([
+                    ft.Text("Yedek Oluştur", size=12, color=c["text"]), 
+                    ft.Switch(
+                        value=page.app_state.get("backup_enabled", False), 
+                        scale=0.8, active_color=COLOR_ACCENT,
+                        on_change=lambda e: asyncio.create_task(toggle_setting("backup_enabled", e.control.value))
+                    )
+                ], alignment="spaceBetween"),
             ], spacing=5, scroll="auto")
         )
 
@@ -590,7 +891,8 @@ async def main(page: ft.Page):
             0: build_dashboard,
             1: build_history_view,
             2: build_logs_view,
-            3: build_models_view
+            3: build_models_view,
+            4: build_settings_view
         }
         
         view_content = tab_views.get(page.app_state["selected_tab"], build_dashboard)()
@@ -718,6 +1020,7 @@ async def main(page: ft.Page):
         page.update()
 
     # Uygulamayı başlat
+    await refresh_stats()
     await build_ui()
 
 if __name__ == "__main__":

@@ -1,18 +1,11 @@
 {
-    "source_directory": "{path}",
-    "destination_directory": "{path}",
-    "log_file": "organizer.log",
-    "log_level": "INFO",
     "file_extensions": {
         "Images": [
             ".jpg",
             ".jpeg",
             ".png",
             ".gif",
-            ".bmp",
-            ".svg",
-            ".tiff",
-            ".ico"
+            ".bmp"
         ],
         "Documents": [
             ".pdf",
@@ -20,72 +13,40 @@
             ".doc",
             ".txt",
             ".xlsx",
-            ".xls",
-            ".pptx",
-            ".ppt",
-            ".csv",
-            ".odt",
-            ".rtf"
+            ".pptx"
         ],
-        "Audio": [
-            ".mp3",
-            ".wav",
-            ".flac",
-            ".aac",
-            ".ogg",
-            ".wma",
-            ".m4a"
-        ],
-        "Video": [
+        "Videos": [
             ".mp4",
             ".mkv",
             ".avi",
-            ".mov",
-            ".wmv",
-            ".flv",
-            ".webm",
-            ".m4v"
+            ".mov"
+        ],
+        "Music": [
+            ".mp3",
+            ".wav",
+            ".aac"
         ],
         "Archives": [
             ".zip",
             ".rar",
             ".7z",
             ".tar",
-            ".gz",
-            ".bz2",
-            ".iso"
+            ".gz"
         ],
         "Code": [
             ".py",
             ".js",
             ".html",
             ".css",
-            ".java",
+            ".json",
             ".cpp",
             ".c",
-            ".h",
-            ".json",
-            ".xml",
-            ".sql",
-            ".sh",
-            ".bat"
-        ],
-        "Executables": [
-            ".exe",
-            ".msi",
-            ".bat",
-            ".sh",
-            ".apk",
-            ".app"
+            ".java"
         ]
     },
-    "monitoring": {
-        "enabled": true,
-        "interval": 1,
-        "recursive": false
-    },
-    "renaming": {
-        "enabled": false,
-        "format": "original"
-    }
+    "source_directory": "C:/Users/tanri/Pictures",
+    "destination_directory": "",
+    "models": [],
+    "clean_names": true,
+    "backup_enabled": true
 }

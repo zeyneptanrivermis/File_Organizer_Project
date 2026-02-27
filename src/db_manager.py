@@ -50,7 +50,7 @@ class DBManager:
 
     def _seed_data(self):
         with self._get_connection() as conn:
-            conn.execute("INSERT OR IGNORE INTO op_types (name) VALUES ('MOVE'), ('UNDO'), ('RENAME')")
+            conn.execute("INSERT OR IGNORE INTO op_types (name) VALUES ('MOVE'), ('UNDO'), ('RENAME'), ('ADMIN')")
 
     def log_move(self, file_metadata, old_path, new_path):
         """Bir taşıma işlemini tüm tablolara atomik olarak kaydeder."""
@@ -73,6 +73,14 @@ class DBManager:
                 VALUES (?, (SELECT id FROM op_types WHERE name='MOVE'), ?, ?)
             """, (file_id, str(old_path), str(new_path)))
 
+    def log_event(self, event_name, status="SUCCESS"):
+        """Genel bir yönetimsel olayı kaydeder (Model eklendi vb.)."""
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO operations (file_id, type_id, old_path, new_path, status)
+                VALUES (NULL, (SELECT id FROM op_types WHERE name='ADMIN'), ?, '', ?)
+            """, (event_name, status))
+
     def get_history_by_date(self, start_date, end_date):
         """Tarih aralığına göre detaylı döküm verir."""
         query = """
@@ -83,3 +91,25 @@ class DBManager:
         """
         with self._get_connection() as conn:
             return [dict(row) for row in conn.execute(query, (f"{start_date} 00:00:00", f"{end_date} 23:59:59")).fetchall()]
+
+    def get_category_stats(self, extension_map):
+        """Kategorilere göre dosya sayısı ve toplam boyutu döndürür."""
+        stats = {cat: {"count": 0, "size": 0} for cat in extension_map.keys()}
+        stats["Others"] = {"count": 0, "size": 0}
+
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT extension, size FROM files").fetchall()
+            for row in rows:
+                ext = row["extension"]
+                size = row["size"]
+                found = False
+                for cat, exts in extension_map.items():
+                    if ext in exts:
+                        stats[cat]["count"] += 1
+                        stats[cat]["size"] += size
+                        found = True
+                        break
+                if not found:
+                    stats["Others"]["count"] += 1
+                    stats["Others"]["size"] += size
+        return stats

@@ -1,29 +1,22 @@
 import re
-import unicodedata
+import os
 
 def sanitize_filename(filename):
-    """
-    Dosya ismini temizler:
-    1. Türkçe karakterleri İngilizceye çevirir (ç -> c, ş -> s).
-    2. Boşlukları alt tire (_) ile değiştirir.
-    3. Alfanümerik olmayan (nokta ve tire hariç) karakterleri siler.
-    """
-    # Dosya adı ve uzantısını ayır
-    if '.' in filename:
-        name, ext = filename.rsplit('.', 1)
-        ext = f".{ext}"
-    else:
-        name = filename
-        ext = ""
+    """Dosya adlarını temizler: küçük harf, özel karakterleri temizle, boşlukları '_' yap."""
+    name, ext = os.path.splitext(filename)
     
-    # 1. Unicode Normalizasyonu (Türkçe karakter düzeltme)
-    # Örn: "ödev" -> "odev"
-    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+    # Küçük harfe çevir ve Türkçe karakterleri/özel karakterleri temizle
+    name = name.lower()
     
-    # 2. İstenmeyen karakterleri sil (Sadece harf, rakam, - ve _ kalsın)
-    name = re.sub(r'[^\w\s.-]', '', name)
+    # Sadece harf, rakam, tire ve alt çizgiyi tut
+    # (Bu basit bir versiyondur, gerekirse genişletilebilir)
+    name = re.sub(r'[^\w\s-]', '', name)
     
-    # 3. Boşlukları _ yap
-    name = re.sub(r'[-\s]+', '_', name).strip('-_')
+    # Boşlukları ve tekrarlayan işaretleri temizle
+    name = re.sub(r'[-\s]+', '_', name)
+    name = name.strip('_')
     
+    if not name:
+        name = "unnamed_file"
+        
     return f"{name}{ext}"

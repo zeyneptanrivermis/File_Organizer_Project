@@ -1,41 +1,22 @@
 import logging
-import sys
-from pathlib import Path
-from config_loader import load_config
+import os
 
-def get_logger(name="OrganizerLogger"):
-    """
-    Konfigürasyondaki ayara göre bir logger döner.
-    Hem dosyaya hem de konsola log basar.
-    """
-    config = load_config()
-    log_file_path = config.get("log_file_path", "organizer.log")
-
+def get_logger(name="file_organizer"):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
-
-    # Eğer daha önce handler eklendiyse tekrar ekleme (Multiprocess/import sismesi onlemi)
-    if logger.hasHandlers():
-        return logger
-
-    # Format
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-
-    # 1. Dosya Handler
-    try:
-        file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    except Exception as e:
-        print(f"Log dosyası oluşturulamadı: {e}")
-
-    # 2. Konsol Handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
+    if not logger.handlers:
+        logger.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        
+        # Console handler
+        ch = logging.StreamHandler()
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+        
+        # File handler
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        fh = logging.FileHandler(os.path.join(log_dir, "app.log"), encoding="utf-8")
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
     return logger
-
-if __name__ == "__main__":
-    log = get_logger()
-    log.info("Logger test mesajı: Sistem çalışıyor.")

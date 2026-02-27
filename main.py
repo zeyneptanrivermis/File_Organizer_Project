@@ -6,9 +6,9 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.join(current_dir, 'src')
 sys.path.append(src_dir)
 
-from watcher import start_watching
+from core.watcher import start_watching
 from reporter import generate_report
-from organizer import Organizer
+from core.organizer import Organizer
 from filter_engine import FilterEngine
 
 def prompt_list(prompt_text: str) -> list:
