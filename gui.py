@@ -92,14 +92,21 @@ async def main(page: ft.Page):
         if not os.path.exists(source):
             return
             
-        page.watcher = Watcher(source)
-        # Watcher class'ını modifiye etmemek için stop_event kullanalım veya thread'i daemon yapalım
-        # Şimdilik basitçe observer'ı ayrı thread'de başlatalım
+        def on_watcher_event(type_, msg):
+            now = datetime.datetime.now().strftime("%H:%M:%S")
+            page.app_state["logs"].append({"time": now, "type": type_, "msg": msg})
+            
+            if type_ == "success":
+                page.run_task(refresh_stats)
+            elif page.app_state.get("selected_tab") == 2:
+                page.run_task(build_ui)
+
+        page.watcher = Watcher(source, on_event=on_watcher_event)
+        
         def watcher_worker():
             page.watcher.observer.schedule(page.watcher.handler, str(page.watcher.directory), recursive=False)
             page.watcher.observer.start()
             while page.app_state["is_monitoring"]:
-                # Organizer zaten organize_file içinde load_config() yapıyor.
                 time.sleep(1)
             page.watcher.observer.stop()
             page.watcher.observer.join()
@@ -291,7 +298,7 @@ async def main(page: ft.Page):
             def toggle_item(path, val):
                 selected_files[path] = val
 
-            file_list_container = ft.Column(scroll="always", max_height=400, spacing=10)
+            file_list_container = ft.Column(scroll="always", height=400, spacing=10)
 
             def update_dialog_content():
                 file_list_container.controls.clear()
@@ -322,7 +329,7 @@ async def main(page: ft.Page):
                     return
                 
                 show_notification(f"{len(to_move)} dosya taşınıyor...", "info")
-                moved_count = org.move_specific_files(to_move, dest)
+                moved_count = await org.move_specific_files(to_move, dest)
                 
                 now = datetime.datetime.now().strftime("%H:%M:%S")
                 if moved_count > 0:

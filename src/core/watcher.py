@@ -8,9 +8,10 @@ from logger import get_logger
 
 class OrganizationHandler(FileSystemEventHandler):
     """Event handler that triggers organization on file creation."""
-    def __init__(self, organizer):
+    def __init__(self, organizer, on_event=None):
         self.organizer = organizer
         self.logger = get_logger()
+        self.on_event = on_event
 
     def on_created(self, event):
         if event.is_directory:
@@ -18,18 +19,26 @@ class OrganizationHandler(FileSystemEventHandler):
             
         self.logger.info(f"YENİ DOSYA TESPİT EDİLDİ: {event.src_path}")
         print(f"\nAlgılandı: {Path(event.src_path).name}")
+        if self.on_event:
+            self.on_event("info", f"Yeni dosya algılandı: {Path(event.src_path).name}")
         
         time.sleep(1) # Wait for file write to complete
         
-        self.organizer.organize_file(event.src_path)
+        try:
+            result = self.organizer.organize_file(event.src_path)
+            if result and self.on_event:
+                self.on_event("success", f"Organize edildi: {Path(event.src_path).name}")
+        except Exception as e:
+            if self.on_event:
+                self.on_event("error", f"Hata: {str(e)}")
 
 class Watcher:
     """Main Watcher class that handles scanning and monitoring."""
-    def __init__(self, directory):
+    def __init__(self, directory, on_event=None):
         self.directory = Path(directory)
         self.organizer = Organizer()
         self.observer = Observer()
-        self.handler = OrganizationHandler(self.organizer)
+        self.handler = OrganizationHandler(self.organizer, on_event=on_event)
 
     def scan_existing(self):
         """Scans and organizes existing files in the directory."""
